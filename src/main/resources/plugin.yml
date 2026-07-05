@@ -1,0 +1,17 @@
+name: HybridCoreBridge
+version: 1.0.0
+main: org.hybridmindlabs.bridge.HybridCoreBridge
+api-version: '1.16'
+author: HybridMind Labs
+description: HybridCore game-server bridge — executes queued reward/ban commands from the site.
+
+commands:
+  hcbridge:
+    description: HybridCore bridge admin command.
+    usage: /hcbridge poll
+    permission: hybridcore.bridge.admin
+
+permissions:
+  hybridcore.bridge.admin:
+    description: Allows forcing a bridge poll.
+    default: op

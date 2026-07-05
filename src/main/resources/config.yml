@@ -1,0 +1,14 @@
+# HybridCore Bridge configuration
+
+# Your HybridCore site base URL (no trailing slash).
+base-url: "https://your-community.com"
+
+# Per-server bridge token from Admin -> Servers -> (server) -> Bridge.
+# Starts with hcb_ and is shown only once when generated.
+token: "none"
+
+# How often (seconds) to poll the site for new commands. Minimum 2.
+poll-interval-seconds: 5
+
+# true = print debug output to the server console.
+debug: false
