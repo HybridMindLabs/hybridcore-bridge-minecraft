@@ -19,7 +19,7 @@ Authenticated with a per-server bearer token (`hcb_…`).
 
 ## Requirements
 
-- **Spigot / Paper** server, Minecraft **1.16+**, **Java 17+**
+- **Spigot / Paper** server, Minecraft **1.8.9+** (up to latest **1.21+**), **Java 8+** (Java 8, 11, 17, 21+)
 - HybridCore **≥ 0.2.0** on the site side
 
 ## Building
@@ -30,7 +30,7 @@ mvn clean package
 
 The jar is produced at `target/HybridCoreBridge.jar`.
 
-> Gson and the Java HTTP client are provided by the server/JVM, so nothing is
+> Gson and HTTP transport (`HttpURLConnection`) are provided by the server/JVM, so nothing is
 > shaded — the jar stays tiny.
 
 ## Installation

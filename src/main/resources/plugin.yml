@@ -1,7 +1,6 @@
 name: HybridCoreBridge
 version: 1.0.0
 main: org.hybridmindlabs.bridge.HybridCoreBridge
-api-version: '1.16'
 author: HybridMind Labs
 description: HybridCore game-server bridge — executes queued reward/ban commands from the site.
 

@@ -4,22 +4,27 @@ import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
-import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import org.bukkit.Bukkit;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.time.Duration;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
  * HybridCore — Game-Server Bridge (Minecraft / Spigot / Paper).
+ *
+ * Compatible with Minecraft 1.8.9 through latest (1.21+) and Java 8+.
  *
  * Polls the HybridCore site for queued commands (vote/store/giveaway rewards,
  * bans, …) and runs them from the console, then acks the executed ones.
@@ -34,7 +39,6 @@ public final class HybridCoreBridge extends JavaPlugin {
     private static final String PREFIX = "[HybridCore] ";
 
     private final Gson gson = new Gson();
-    private HttpClient http;
 
     private String baseUrl;
     private String token;
@@ -45,8 +49,6 @@ public final class HybridCoreBridge extends JavaPlugin {
     public void onEnable() {
         saveDefaultConfig();
         loadSettings();
-
-        http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
         if (!isConfigured()) {
             getLogger().warning("Set a valid bridge token (hcb_...) in config.yml, then restart.");
@@ -104,22 +106,18 @@ public final class HybridCoreBridge extends JavaPlugin {
             return;
         }
         try {
-            HttpRequest req = authRequest("/api/bridge/poll")
-                    .POST(HttpRequest.BodyPublishers.noBody())
-                    .build();
+            HttpResponseData res = sendPost("/api/bridge/poll", null);
 
-            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
-
-            if (res.statusCode() == 401) {
+            if (res.statusCode == 401) {
                 getLogger().severe("Bridge token rejected (401). Check config.yml.");
                 return;
             }
-            if (res.statusCode() != 200) {
-                debug("Poll HTTP " + res.statusCode());
+            if (res.statusCode != 200) {
+                debug("Poll HTTP " + res.statusCode);
                 return;
             }
 
-            handle(res.body());
+            handle(res.body);
         } catch (Exception e) {
             debug("Poll error: " + e.getMessage());
         }
@@ -128,25 +126,29 @@ public final class HybridCoreBridge extends JavaPlugin {
     private void handle(String body) {
         JsonObject root;
         try {
-            root = JsonParser.parseString(body).getAsJsonObject();
+            // Using gson.fromJson for backwards compatibility with older Gson versions in 1.8.8 (2.2.x)
+            root = gson.fromJson(body, JsonObject.class);
         } catch (Exception e) {
-            debug("Invalid JSON in poll response.");
+            debug("Invalid JSON in poll response: " + e.getMessage());
             return;
         }
 
-        if (!root.has("commands") || !root.get("commands").isJsonArray()) {
+        if (root == null || !root.has("commands") || !root.get("commands").isJsonArray()) {
             return;
         }
 
         JsonArray arr = root.getAsJsonArray("commands");
-        List<Integer> ids = new ArrayList<>();
-        List<String> commands = new ArrayList<>();
+        List<Integer> ids = new ArrayList<Integer>();
+        List<String> commands = new ArrayList<String>();
 
         for (JsonElement el : arr) {
+            if (el == null || !el.isJsonObject()) {
+                continue;
+            }
             JsonObject obj = el.getAsJsonObject();
-            int id = obj.has("id") ? obj.get("id").getAsInt() : 0;
-            String cmd = obj.has("command") ? obj.get("command").getAsString() : "";
-            if (id > 0 && !cmd.isEmpty()) {
+            int id = (obj.has("id") && obj.get("id").isJsonPrimitive()) ? obj.get("id").getAsInt() : 0;
+            String cmd = (obj.has("command") && obj.get("command").isJsonPrimitive()) ? obj.get("command").getAsString() : "";
+            if (id > 0 && !cmd.trim().isEmpty()) {
                 ids.add(id);
                 commands.add(cmd);
             }
@@ -172,27 +174,81 @@ public final class HybridCoreBridge extends JavaPlugin {
         try {
             JsonObject payload = new JsonObject();
             JsonArray idsArray = new JsonArray();
-            ids.forEach(idsArray::add);
+            // Explicitly wrapping in JsonPrimitive ensures compatibility with Gson 2.2.x (MC 1.8.x)
+            for (Integer id : ids) {
+                idsArray.add(new JsonPrimitive(id));
+            }
             payload.add("ids", idsArray);
 
-            HttpRequest req = authRequest("/api/bridge/ack")
-                    .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
-                    .build();
-
-            HttpResponse<String> res = http.send(req, HttpResponse.BodyHandlers.ofString());
-            debug("Ack HTTP " + res.statusCode());
+            HttpResponseData res = sendPost("/api/bridge/ack", gson.toJson(payload));
+            debug("Ack HTTP " + res.statusCode);
         } catch (Exception e) {
             debug("Ack error: " + e.getMessage());
         }
     }
 
-    private HttpRequest.Builder authRequest(String path) {
-        return HttpRequest.newBuilder(URI.create(baseUrl + path))
-                .timeout(Duration.ofSeconds(15))
-                .header("Authorization", "Bearer " + token)
-                .header("Accept", "application/json")
-                .header("X-Requested-With", "XMLHttpRequest");
+    // ── HTTP transport (Java 8+ HttpURLConnection) ───────────────
+
+    private HttpResponseData sendPost(String path, String jsonPayload) throws IOException {
+        URL url = new URL(baseUrl + path);
+        HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+        try {
+            conn.setRequestMethod("POST");
+            conn.setConnectTimeout(10000);
+            conn.setReadTimeout(15000);
+            conn.setUseCaches(false);
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+            conn.setRequestProperty("Accept", "application/json");
+            conn.setRequestProperty("X-Requested-With", "XMLHttpRequest");
+            conn.setRequestProperty("User-Agent", "HybridCoreBridge/1.0");
+
+            if (jsonPayload != null && !jsonPayload.isEmpty()) {
+                conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                conn.setDoOutput(true);
+                byte[] bytes = jsonPayload.getBytes(StandardCharsets.UTF_8);
+                conn.setFixedLengthStreamingMode(bytes.length);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(bytes);
+                    os.flush();
+                }
+            } else {
+                conn.setFixedLengthStreamingMode(0);
+                conn.setDoOutput(true);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.flush();
+                }
+            }
+
+            int statusCode = conn.getResponseCode();
+            InputStream is = (statusCode >= 200 && statusCode < 400)
+                    ? conn.getInputStream()
+                    : conn.getErrorStream();
+
+            String body = "";
+            if (is != null) {
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8))) {
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line);
+                    }
+                    body = sb.toString();
+                }
+            }
+            return new HttpResponseData(statusCode, body);
+        } finally {
+            conn.disconnect();
+        }
+    }
+
+    private static class HttpResponseData {
+        final int statusCode;
+        final String body;
+
+        HttpResponseData(int statusCode, String body) {
+            this.statusCode = statusCode;
+            this.body = body;
+        }
     }
 
     private void debug(String msg) {
